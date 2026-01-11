@@ -37,7 +37,7 @@ export default function Login() {
     const email = formData.get('email');
     const password = formData.get('password');
     const confirmPassword = formData.get('confirmPassword');
-    const role = formData.get('role');
+    const role = 'student'; // Only students can register
 
     if (password !== confirmPassword) {
       toast.error('Passwords do not match');
@@ -157,19 +157,6 @@ export default function Login() {
                       required
                       data-testid="register-email-input"
                     />
-                  </div>
-                  <div className="space-y-2">
-                    <Label htmlFor="register-role">Role</Label>
-                    <select
-                      id="register-role"
-                      name="role"
-                      className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                      required
-                      data-testid="register-role-select"
-                    >
-                      <option value="student">Student</option>
-                      <option value="admin">Admin</option>
-                    </select>
                   </div>
                   <div className="space-y-2">
                     <Label htmlFor="register-password">Password</Label>

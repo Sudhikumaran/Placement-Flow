@@ -1,13 +1,19 @@
-from fastapi import FastAPI, APIRouter, HTTPException, Depends, status, UploadFile, File
+from fastapi import FastAPI, APIRouter, HTTPException, Depends, status, UploadFile, File, Request
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from fastapi.responses import StreamingResponse
 from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
+from contextlib import asynccontextmanager
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.util import get_remote_address
+from slowapi.errors import RateLimitExceeded
+import bleach
+import re
 import os
 import logging
 from pathlib import Path
-from pydantic import BaseModel, Field, EmailStr, ConfigDict
+from pydantic import BaseModel, Field, EmailStr, ConfigDict, validator
 from typing import List, Optional
 from datetime import datetime, timezone, timedelta
 import bcrypt
@@ -20,18 +26,88 @@ load_dotenv(ROOT_DIR / '.env')
 
 # MongoDB connection
 mongo_url = os.environ['MONGO_URL']
-client = AsyncIOMotorClient(mongo_url)
-db = client[os.environ['DB_NAME']]
+client = None
+db = None
 
 # JWT Configuration
-JWT_SECRET = os.environ.get('JWT_SECRET', 'your-secret-key-change-in-production')
+JWT_SECRET = os.environ.get('JWT_SECRET')
+if not JWT_SECRET or JWT_SECRET == 'your-secret-key-change-in-production':
+    raise ValueError("JWT_SECRET must be set in .env file")
 JWT_ALGORITHM = 'HS256'
-JWT_EXPIRATION_HOURS = 24
+JWT_EXPIRATION_HOURS = int(os.environ.get('JWT_EXPIRATION_HOURS', 24))
+
+# Password Policy
+PASSWORD_MIN_LENGTH = int(os.environ.get('PASSWORD_MIN_LENGTH', 8))
+
+# Rate Limiting
+limiter = Limiter(key_func=get_remote_address)
 
 # Security
 security = HTTPBearer()
 
-app = FastAPI()
+# Input Sanitization
+def sanitize_input(text: str) -> str:
+    """Sanitize text input to prevent XSS attacks"""
+    if not text:
+        return text
+    return bleach.clean(text, tags=[], strip=True)
+
+def validate_password(password: str) -> None:
+    """Validate password strength"""
+    if len(password) < PASSWORD_MIN_LENGTH:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Password must be at least {PASSWORD_MIN_LENGTH} characters long"
+        )
+    if not re.search(r"[A-Z]", password):
+        raise HTTPException(
+            status_code=400,
+            detail="Password must contain at least one uppercase letter"
+        )
+    if not re.search(r"[a-z]", password):
+        raise HTTPException(
+            status_code=400,
+            detail="Password must contain at least one lowercase letter"
+        )
+    if not re.search(r"[0-9]", password):
+        raise HTTPException(
+            status_code=400,
+            detail="Password must contain at least one number"
+        )
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Startup: Connect to MongoDB
+    global client, db
+    client = AsyncIOMotorClient(mongo_url)
+    db = client[os.environ['DB_NAME']]
+    print(f"✓ Connected to MongoDB: {os.environ['DB_NAME']}")
+    
+    # Create database indexes for performance
+    await db.users.create_index("email", unique=True)
+    await db.users.create_index("id")
+    await db.student_profiles.create_index("user_id", unique=True)
+    await db.student_profiles.create_index("email")
+    await db.placement_drives.create_index("id", unique=True)
+    await db.placement_drives.create_index("deadline")
+    await db.placement_drives.create_index("status")
+    await db.applications.create_index("id", unique=True)
+    await db.applications.create_index("student_id")
+    await db.applications.create_index("drive_id")
+    await db.applications.create_index("status")
+    await db.applications.create_index("applied_at")
+    await db.notifications.create_index("user_id")
+    await db.notifications.create_index("created_at")
+    print("✓ Database indexes created")
+    
+    yield
+    # Shutdown: Close MongoDB connection
+    client.close()
+    print("✓ MongoDB connection closed")
+
+app = FastAPI(lifespan=lifespan)
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 api_router = APIRouter(prefix="/api")
 
 # ============ Models ============
@@ -51,6 +127,7 @@ class TokenResponse(BaseModel):
     role: str
     user_id: str
     name: str
+    refresh_token: Optional[str] = None
 
 class StudentProfile(BaseModel):
     name: str
@@ -154,11 +231,17 @@ def hash_password(password: str) -> str:
 def verify_password(password: str, hashed: str) -> bool:
     return bcrypt.checkpw(password.encode('utf-8'), hashed.encode('utf-8'))
 
-def create_token(user_id: str, role: str) -> str:
-    expiration = datetime.now(timezone.utc) + timedelta(hours=JWT_EXPIRATION_HOURS)
+def create_token(user_id: str, role: str, token_type: str = 'access') -> str:
+    """Create JWT token (access or refresh)"""
+    if token_type == 'refresh':
+        expiration = datetime.now(timezone.utc) + timedelta(days=7)  # Refresh tokens last 7 days
+    else:
+        expiration = datetime.now(timezone.utc) + timedelta(hours=JWT_EXPIRATION_HOURS)
+    
     payload = {
         'user_id': user_id,
         'role': role,
+        'type': token_type,
         'exp': expiration
     }
     return jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALGORITHM)
@@ -167,6 +250,11 @@ async def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(s
     try:
         token = credentials.credentials
         payload = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
+        
+        # Verify token type
+        if payload.get('type') != 'access':
+            raise HTTPException(status_code=401, detail='Invalid token type')
+        
         user_id = payload.get('user_id')
         role = payload.get('role')
         if not user_id:
@@ -212,7 +300,15 @@ def check_eligibility(profile: dict, criteria: dict) -> bool:
 # ============ Auth Routes ============
 
 @api_router.post('/auth/register', response_model=TokenResponse)
-async def register(user: UserRegister):
+@limiter.limit("5/hour")
+async def register(request: Request, user: UserRegister):
+    # Validate password strength
+    validate_password(user.password)
+    
+    # Sanitize inputs
+    user.name = sanitize_input(user.name)
+    user.email = user.email.lower().strip()
+    
     # Check if user exists
     existing = await db.users.find_one({'email': user.email}, {'_id': 0})
     if existing:
@@ -246,16 +342,61 @@ async def register(user: UserRegister):
         await db.student_profiles.insert_one(profile_doc)
     
     token = create_token(user_id, user.role)
-    return TokenResponse(token=token, role=user.role, user_id=user_id, name=user.name)
+    refresh_token = create_token(user_id, user.role, 'refresh')
+    return TokenResponse(token=token, role=user.role, user_id=user_id, name=user.name, refresh_token=refresh_token)
 
 @api_router.post('/auth/login', response_model=TokenResponse)
-async def login(credentials: UserLogin):
+@limiter.limit("10/minute")
+async def login(request: Request, credentials: UserLogin):
+    credentials.email = credentials.email.lower().strip()
     user = await db.users.find_one({'email': credentials.email}, {'_id': 0})
     if not user or not verify_password(credentials.password, user['password_hash']):
         raise HTTPException(status_code=401, detail='Invalid credentials')
     
     token = create_token(user['id'], user['role'])
-    return TokenResponse(token=token, role=user['role'], user_id=user['id'], name=user['name'])
+    refresh_token = create_token(user['id'], user['role'], 'refresh')
+    return TokenResponse(token=token, role=user['role'], user_id=user['id'], name=user['name'], refresh_token=refresh_token)
+
+class RefreshTokenRequest(BaseModel):
+    refresh_token: str
+
+@api_router.post('/auth/refresh', response_model=TokenResponse)
+@limiter.limit("20/minute")
+async def refresh_token(request: Request, data: RefreshTokenRequest):
+    """Refresh access token using refresh token"""
+    try:
+        payload = jwt.decode(data.refresh_token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
+        
+        # Verify it's a refresh token
+        if payload.get('type') != 'refresh':
+            raise HTTPException(status_code=401, detail='Invalid token type')
+        
+        user_id = payload.get('user_id')
+        role = payload.get('role')
+        
+        if not user_id or not role:
+            raise HTTPException(status_code=401, detail='Invalid token')
+        
+        # Verify user still exists
+        user = await db.users.find_one({'id': user_id}, {'_id': 0})
+        if not user:
+            raise HTTPException(status_code=401, detail='User not found')
+        
+        # Create new tokens
+        new_access_token = create_token(user_id, role)
+        new_refresh_token = create_token(user_id, role, 'refresh')
+        
+        return TokenResponse(
+            token=new_access_token,
+            role=role,
+            user_id=user_id,
+            name=user['name'],
+            refresh_token=new_refresh_token
+        )
+    except jwt.ExpiredSignatureError:
+        raise HTTPException(status_code=401, detail='Refresh token expired')
+    except jwt.InvalidTokenError:
+        raise HTTPException(status_code=401, detail='Invalid refresh token')
 
 # ============ Student Profile Routes ============
 
@@ -570,6 +711,22 @@ async def export_applications(drive_id: str, current_user: dict = Depends(requir
         headers={'Content-Disposition': f'attachment; filename=applications_{drive_id}.csv'}
     )
 
+# ============ Health Check Route ============
+
+@app.get('/health')
+async def health_check():
+    """Health check endpoint for container orchestration"""
+    try:
+        # Check database connection
+        await db.command('ping')
+        return {
+            'status': 'healthy',
+            'database': 'connected',
+            'timestamp': datetime.now(timezone.utc).isoformat()
+        }
+    except Exception as e:
+        raise HTTPException(status_code=503, detail=f'Service unavailable: {str(e)}')
+
 app.include_router(api_router)
 
 app.add_middleware(
@@ -585,7 +742,3 @@ logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
-
-@app.on_event("shutdown")
-async def shutdown_db_client():
-    client.close()
