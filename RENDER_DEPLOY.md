@@ -5,10 +5,12 @@
 Your application is now configured for Render.com deployment with `render.yaml`.
 
 ### Step 1: Create Render Account
+
 1. Go to [render.com](https://render.com)
 2. Sign up or log in with GitHub
 
 ### Step 2: Create New Blueprint
+
 1. Click **"New +"** → **"Blueprint"**
 2. Connect your GitHub repository: `Sudhikumaran/Placement-Flow`
 3. Render will automatically detect `render.yaml`
@@ -17,6 +19,7 @@ Your application is now configured for Render.com deployment with `render.yaml`.
 ### Step 3: Configure Environment Variables
 
 #### Backend Service Environment Variables
+
 In the Render dashboard for `placement-flow-backend`, add:
 
 ```
@@ -31,6 +34,7 @@ CORS_ORIGINS=https://placement-flow-frontend.onrender.com
 **Important**: Replace `placement-flow-frontend.onrender.com` with your actual frontend URL after deployment.
 
 #### Frontend Service Environment Variables
+
 In the Render dashboard for `placement-flow-frontend`, add:
 
 ```
@@ -40,6 +44,7 @@ REACT_APP_BACKEND_URL=https://placement-flow-backend.onrender.com
 **Important**: Replace `placement-flow-backend.onrender.com` with your actual backend URL after deployment.
 
 ### Step 4: Update CORS After Deployment
+
 Once both services are deployed:
 
 1. Note your frontend URL (e.g., `https://your-app.onrender.com`)
@@ -48,11 +53,13 @@ Once both services are deployed:
 3. Trigger a manual redeploy of the backend
 
 ### Step 5: Monitor Deployment
+
 - Backend build time: ~3-5 minutes
 - Frontend build time: ~3-5 minutes
 - Watch logs in Render dashboard for any errors
 
 ### Step 6: Test Your Deployment
+
 1. Visit your frontend URL
 2. Register a new student account
 3. Test login functionality
@@ -61,7 +68,9 @@ Once both services are deployed:
 ## Troubleshooting
 
 ### Build Fails
+
 - **Error**: "Could not open requirements file"
+
   - ✅ Fixed: `render.yaml` now specifies `cd backend` in buildCommand
 
 - **Error**: "Module not found"
@@ -69,16 +78,19 @@ Once both services are deployed:
   - Verify Python version is 3.13.4
 
 ### CORS Errors
+
 - Update `CORS_ORIGINS` environment variable with your frontend URL
 - Must include `https://` protocol
 - Redeploy backend after changing environment variables
 
 ### Database Connection Issues
+
 - Verify MongoDB Atlas connection string is correct
 - Check MongoDB Atlas network access (allow all IPs: `0.0.0.0/0` for Render)
 - Ensure database user has read/write permissions
 
 ### App Not Responding
+
 - Check service logs in Render dashboard
 - Verify health check endpoint: `/health` for backend
 - Free tier services sleep after 15 minutes of inactivity
@@ -86,18 +98,22 @@ Once both services are deployed:
 ## Free Tier Limitations
 
 Render's free tier includes:
+
 - ✅ 750 hours/month per service
 - ⚠️ Services sleep after 15 minutes of inactivity
 - ⚠️ Cold start takes ~30 seconds
 - ⚠️ Limited to 512MB RAM per service
 
 ### Keeping Services Awake (Optional)
+
 Use a service like [UptimeRobot](https://uptimerobot.com/) to ping your health endpoint every 5 minutes:
+
 - Ping URL: `https://your-backend.onrender.com/health`
 
 ## Upgrade to Paid Plan
 
 For production use, consider upgrading:
+
 - **Starter Plan** ($7/month per service)
   - No cold starts
   - Always-on services
@@ -108,6 +124,7 @@ For production use, consider upgrading:
 If you prefer Docker over Render's native build:
 
 1. Update `render.yaml` to use Docker:
+
 ```yaml
 services:
   - type: web
@@ -131,12 +148,14 @@ services:
 ## Cost Estimate
 
 **Free Tier (Current)**:
+
 - Backend: Free (with sleep)
 - Frontend: Free (with sleep)
 - MongoDB Atlas: Free (M0 tier, 512MB)
 - **Total**: $0/month
 
 **Paid Tier (Recommended for Production)**:
+
 - Backend Starter: $7/month
 - Frontend Starter: $7/month
 - MongoDB Atlas M2: $9/month
@@ -161,6 +180,7 @@ services:
 **Deployment Status**: ✅ Ready to deploy!
 
 Your application is configured with:
+
 - ✅ Production-grade security
 - ✅ Health checks
 - ✅ Automatic HTTPS

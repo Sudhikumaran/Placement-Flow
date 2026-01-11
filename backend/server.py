@@ -729,19 +729,6 @@ async def health_check():
 
 # ============ Root Endpoint ============
 
-@app.get('/')
-async def root():
-    """Root endpoint for deployment verification"""
-    return {
-        'status': 'online',
-        'service': 'Placement Flow API',
-        'version': '2.0.0',
-        'endpoints': {
-            'health': '/health',
-            'api': '/api',
-            'docs': '/docs'
-        }
-    }
 
 app.include_router(api_router)
 
