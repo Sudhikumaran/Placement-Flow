@@ -5,6 +5,34 @@ const AuthContext = createContext();
 
 const API_URL = process.env.REACT_APP_BACKEND_URL + '/api';
 
+// Configure axios to always include auth token
+axios.interceptors.request.use(
+  (config) => {
+    const token = localStorage.getItem('token');
+    if (token) {
+      config.headers.Authorization = `Bearer ${token}`;
+    }
+    return config;
+  },
+  (error) => {
+    return Promise.reject(error);
+  }
+);
+
+// Handle 401 responses globally
+axios.interceptors.response.use(
+  (response) => response,
+  (error) => {
+    if (error.response?.status === 401) {
+      // Token expired or invalid - clear auth and redirect to login
+      localStorage.removeItem('token');
+      localStorage.removeItem('user');
+      window.location.href = '/login';
+    }
+    return Promise.reject(error);
+  }
+);
+
 export const useAuth = () => {
   const context = useContext(AuthContext);
   if (!context) {
@@ -25,7 +53,6 @@ export const AuthProvider = ({ children }) => {
     if (storedUser && storedToken) {
       setUser(JSON.parse(storedUser));
       setToken(storedToken);
-      axios.defaults.headers.common['Authorization'] = `Bearer ${storedToken}`;
     }
     setLoading(false);
   }, []);
@@ -40,7 +67,6 @@ export const AuthProvider = ({ children }) => {
       setToken(token);
       localStorage.setItem('user', JSON.stringify(userData));
       localStorage.setItem('token', token);
-      axios.defaults.headers.common['Authorization'] = `Bearer ${token}`;
       
       return userData;
     } catch (error) {
@@ -58,7 +84,6 @@ export const AuthProvider = ({ children }) => {
       setToken(newToken);
       localStorage.setItem('user', JSON.stringify(userData));
       localStorage.setItem('token', newToken);
-      axios.defaults.headers.common['Authorization'] = `Bearer ${newToken}`;
       
       return userData;
     } catch (error) {
@@ -71,7 +96,6 @@ export const AuthProvider = ({ children }) => {
     setToken(null);
     localStorage.removeItem('user');
     localStorage.removeItem('token');
-    delete axios.defaults.headers.common['Authorization'];
   };
 
   const value = {
