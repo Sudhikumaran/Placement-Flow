@@ -937,10 +937,6 @@ const Applicants = () => {
   const location = useLocation();
   const driveId = location.pathname.split('/')[3];
 
-  useEffect(() => {
-    fetchData();
-  }, [driveId]);
-
   const fetchData = async () => {
     try {
       const [driveRes, appsRes] = await Promise.all([
@@ -955,6 +951,11 @@ const Applicants = () => {
       setLoading(false);
     }
   };
+
+  useEffect(() => {
+    fetchData();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [driveId]);
 
   const handleStatusUpdate = async (appId, status) => {
     try {
